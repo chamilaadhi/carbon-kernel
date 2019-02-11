@@ -71,8 +71,10 @@
                             acegi-security;scope=compile|runtime;inline=false
                         </Embed-Dependency>
                         <Include-Resource>
-                            META-INF/services/org.apache.abdera.factory.ExtensionFactory=src/main/resources/META-INF/services/org.apache.abdera.factory.ExtensionFactory
+                            META-INF/services/org.apache.abdera.factory.ExtensionFactory=src/main/resources/META-INF/services/org.apache.abdera.factory.ExtensionFactory,
+                            OSGI-INF/serviceComponents.xml=src/main/resources/META-INF/serviceComponents.xml
                         </Include-Resource>
+                        <Service-Component>OSGI-INF/serviceComponents.xml</Service-Component>
                     </instructions>
                 </configuration>
             </plugin>
