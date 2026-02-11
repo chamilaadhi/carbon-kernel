@@ -1571,11 +1571,6 @@
             </dependency>
             <dependency>
                 <groupId>org.wso2.carbon</groupId>
-                <artifactId>org.wso2.carbon.registry.xboot</artifactId>
-                <version>${carbon.kernel.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.wso2.carbon</groupId>
                 <artifactId>javax.cache.wso2</artifactId>
                 <version>${carbon.kernel.version}</version>
             </dependency>
