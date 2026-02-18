@@ -29,6 +29,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.tomcat.InstanceManager;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
+import org.osgi.framework.Constants;
 import org.osgi.framework.ServiceReference;
 import org.osgi.service.component.ComponentContext;
 import org.osgi.service.component.annotations.Activate;
@@ -210,7 +211,7 @@ public class CarbonUIServiceComponent {
 
     public void start(BundleContext context) throws Exception {
         this.bundleContext = context;
-
+System.out.println("Starting Carbon UI bundle +++++++++++++++++++++++");
         ServerConfigurationService serverConfig = getServerConfiguration();
 
         boolean isLocalTransportMode = checkForLocalTransportMode(serverConfig);
@@ -308,6 +309,17 @@ public class CarbonUIServiceComponent {
         carbonInitparams.put("osgi.http.whiteboard.context.select", "(osgi.http.whiteboard.context.name=carbonContext)");
         context.registerService(Servlet.class, adaptedJspServlet, carbonInitparams);
 
+        // Register TilesJspServlet for default context to handle tenant URLs like /t/{tenant}/carbon/**/*.jsp
+        // This ensures tenant JSPs share session with CSRFGuard components in default context
+        Servlet defaultJspServlet = new TilesJspServlet(context.getBundle(), uiResourceRegistry);
+        Dictionary<String, Object> defaultJspParams = new Hashtable<>();
+        defaultJspParams.put("servlet.init.strictQuoteEscaping", "false");
+        // Register multiple patterns to cover all nested JSP paths (/carbon/*.jsp, /carbon/*/*.jsp, etc.)
+        defaultJspParams.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_SERVLET_PATTERN, 
+                new String[] {"/carbon/*.jsp", "/carbon/*/*.jsp", "/carbon/*/*/*.jsp", "/carbon/*/*/*/*.jsp"});
+        // No context selector - uses default context
+        context.registerService(Servlet.class, defaultJspServlet, defaultJspParams);
+
         // Determine which configuration context to use based on transport mode
         ConfigurationContext contextToUse = isLocalTransportMode ? serverConfigContext : clientConfigContext;
 
@@ -335,30 +347,66 @@ public class CarbonUIServiceComponent {
         listenerPropsForDefaultContext.put("osgi.http.whiteboard.listener", "true");
         context.registerService(ServletContextListener.class, contextInitializer, listenerPropsForDefaultContext);
 
-        // Register CSRFGuard listeners and filter using HTTP Whiteboard pattern
+        // Register CSRFGuard listeners in BOTH contexts (default and carbonContext)
+        // Sessions can be created in either context depending on login URL
         try {
-            // Register CsrfGuardHttpSessionListener - generates per-session CSRF tokens
+            // Register CsrfGuardServletContextListener in DEFAULT context
+            Class<?> contextListenerClass = Class.forName("org.owasp.csrfguard.CsrfGuardServletContextListener");
+            ServletContextListener csrfContextListenerDefault = (ServletContextListener) contextListenerClass.newInstance();
+            Dictionary<String, String> contextListenerDefaultProps = new Hashtable<>();
+            contextListenerDefaultProps.put("osgi.http.whiteboard.listener", "true");
+            context.registerService(ServletContextListener.class, csrfContextListenerDefault, contextListenerDefaultProps);
+            
+            // Register CsrfGuardServletContextListener in CARBON context
+            ServletContextListener csrfContextListenerCarbon = (ServletContextListener) contextListenerClass.newInstance();
+            Dictionary<String, String> contextListenerCarbonProps = new Hashtable<>();
+            contextListenerCarbonProps.put("osgi.http.whiteboard.listener", "true");
+            contextListenerCarbonProps.put("osgi.http.whiteboard.context.select", "(osgi.http.whiteboard.context.name=carbonContext)");
+            context.registerService(ServletContextListener.class, csrfContextListenerCarbon, contextListenerCarbonProps);
+            
+            // Register CsrfGuardHttpSessionListener in DEFAULT context
             Class<?> sessionListenerClass = Class.forName("org.owasp.csrfguard.CsrfGuardHttpSessionListener");
-            Object sessionListener = sessionListenerClass.newInstance();
+            Object sessionListenerDefault = sessionListenerClass.newInstance();
+            Dictionary<String, String> sessionListenerDefaultProps = new Hashtable<>();
+            sessionListenerDefaultProps.put("osgi.http.whiteboard.listener", "true");
+            context.registerService("javax.servlet.http.HttpSessionListener", sessionListenerDefault, sessionListenerDefaultProps);
             
-            Dictionary<String, String> sessionListenerProps = new Hashtable<>();
-            sessionListenerProps.put("osgi.http.whiteboard.context.select", "(osgi.http.whiteboard.context.name=carbonContext)");
-            sessionListenerProps.put("osgi.http.whiteboard.listener", "true");
+            // Register CsrfGuardHttpSessionListener in CARBON context
+            Object sessionListenerCarbon = sessionListenerClass.newInstance();
+            Dictionary<String, String> sessionListenerCarbonProps = new Hashtable<>();
+            sessionListenerCarbonProps.put("osgi.http.whiteboard.listener", "true");
+            sessionListenerCarbonProps.put("osgi.http.whiteboard.context.select", "(osgi.http.whiteboard.context.name=carbonContext)");
+            context.registerService("javax.servlet.http.HttpSessionListener", sessionListenerCarbon, sessionListenerCarbonProps);
             
-            // Register as javax.servlet.http.HttpSessionListener
-            context.registerService("javax.servlet.http.HttpSessionListener", sessionListener, sessionListenerProps);
+            // Register TenantAwareJavaScriptServlet filter in DEFAULT context
+            Filter csrfJsFilterDefault = new org.wso2.carbon.ui.TenantAwareJavaScriptServlet();
+            Dictionary<String, Object> csrfJsFilterDefaultProps = new Hashtable<>();
+            csrfJsFilterDefaultProps.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_FILTER_PATTERN, "/*");
+            csrfJsFilterDefaultProps.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_FILTER_NAME, "CSRFJavaScriptFilter-Default");
+            csrfJsFilterDefaultProps.put(Constants.SERVICE_RANKING, Integer.valueOf(200));
+            // No context selector - uses default context
+            context.registerService("javax.servlet.Filter", csrfJsFilterDefault, csrfJsFilterDefaultProps);
+            
+            // ALSO register TenantAwareJavaScriptServlet filter in CARBON context (for super tenant)
+            Filter csrfJsFilterCarbon = new org.wso2.carbon.ui.TenantAwareJavaScriptServlet();
+            Dictionary<String, Object> csrfJsFilterCarbonProps = new Hashtable<>();
+            csrfJsFilterCarbonProps.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_FILTER_PATTERN, "/*");
+            csrfJsFilterCarbonProps.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_FILTER_NAME, "CSRFJavaScriptFilter-Carbon");
+            csrfJsFilterCarbonProps.put(Constants.SERVICE_RANKING, Integer.valueOf(200));
+            csrfJsFilterCarbonProps.put("osgi.http.whiteboard.context.select", "(osgi.http.whiteboard.context.name=carbonContext)");
+            context.registerService("javax.servlet.Filter", csrfJsFilterCarbon, csrfJsFilterCarbonProps);
             
             // Register CsrfGuardFilter
             Class<?> csrfGuardFilterClass = Class.forName("org.owasp.csrfguard.CsrfGuardFilter");
             Filter csrfGuardFilter = (Filter) csrfGuardFilterClass.newInstance();
             
-            Dictionary<String, String> csrfFilterProps = new Hashtable<>();
-            csrfFilterProps.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_FILTER_PATTERN, "/carbon/*");
-            csrfFilterProps.put("osgi.http.whiteboard.context.select", "(osgi.http.whiteboard.context.name=carbonContext)");
+            Dictionary<String, Object> csrfFilterProps = new Hashtable<>();
+            csrfFilterProps.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_FILTER_PATTERN, "/*");
             csrfFilterProps.put(HttpWhiteboardConstants.HTTP_WHITEBOARD_FILTER_NAME, "CsrfGuardFilter");
-            csrfFilterProps.put("service.ranking", "100");
+            csrfFilterProps.put(Constants.SERVICE_RANKING, Integer.valueOf(100));
+            // No context selector - uses default context
             
-            context.registerService(Filter.class, csrfGuardFilter, csrfFilterProps);
+            context.registerService("javax.servlet.Filter", csrfGuardFilter, csrfFilterProps);
             
             if (log.isDebugEnabled()) {
                 log.debug("CSRFGuard components registered successfully using HTTP Whiteboard pattern");
